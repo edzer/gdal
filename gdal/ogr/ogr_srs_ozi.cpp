@@ -28,9 +28,18 @@
  * DEALINGS IN THE SOFTWARE.
  ****************************************************************************/
 
+#include "cpl_port.h"
 #include "ogr_spatialref.h"
+
+#include <cstdlib>
+#include <cstring>
+
 #include "cpl_conv.h"
 #include "cpl_csv.h"
+#include "cpl_error.h"
+#include "cpl_string.h"
+#include "ogr_core.h"
+#include "ogr_srs_api.h"
 
 CPL_CVSID("$Id$");
 
@@ -117,7 +126,7 @@ OGRErr OGRSpatialReference::importFromOzi( const char * const* papszLines )
 /* -------------------------------------------------------------------- */
     char **papszProj = CSLTokenizeStringComplex( pszProj, ",", TRUE, TRUE );
     char **papszProjParms = CSLTokenizeStringComplex( pszProjParms, ",",
-                                                         TRUE, TRUE );
+                                                      TRUE, TRUE );
     char **papszDatum = NULL;
 
     if( CSLCount(papszProj) < 2 )
@@ -196,7 +205,7 @@ OGRErr OGRSpatialReference::importFromOzi( const char * const* papszLines )
                 break;
             }
         }
-        if( iLine == nLines )    /* Try to guess the UTM zone */
+        if( iLine == nLines )  // Try to guess the UTM zone.
         {
             float fMinLongitude = 1000.0f;
             float fMaxLongitude = -1000.0f;
@@ -277,7 +286,7 @@ OGRErr OGRSpatialReference::importFromOzi( const char * const* papszLines )
     }
 
 /*
- *  Note : The following projections have not been implemented yet
+ *  Note: The following projections have not been implemented yet
  *
  */
 
@@ -387,7 +396,7 @@ OGRErr OGRSpatialReference::importFromOzi( const char * const* papszLines )
         const char *pszOziDatum = CSVFilename( "ozi_datum.csv" );
         CPLString osDName = CSVGetField( pszOziDatum, "NAME", papszDatum[0],
                                     CC_ApproxString, "NAME" );
-        if( strlen(osDName) == 0 )
+        if( osDName.empty() )
         {
             CPLError( CE_Failure, CPLE_AppDefined,
                     "Failed to find datum %s in ozi_datum.csv.",
@@ -421,7 +430,7 @@ OGRErr OGRSpatialReference::importFromOzi( const char * const* papszLines )
                                      CC_ApproxString, "DELTAZ" ) );
 
     /* -------------------------------------------------------------------- */
-    /*      Verify that we can find the CSV file containing the ellipsoids  */
+    /*     Verify that we can find the CSV file containing the ellipsoids.  */
     /* -------------------------------------------------------------------- */
             if( CSVScanFileByName( CSVFilename( "ozi_ellips.csv" ),
                                    "ELLIPSOID_CODE",
@@ -444,7 +453,7 @@ OGRErr OGRSpatialReference::importFromOzi( const char * const* papszLines )
             CPLString osEName =
                 CSVGetField( pszOziEllipse, "ELLIPSOID_CODE", osEllipseCode,
                              CC_ApproxString, "NAME" );
-            if( strlen(osEName) == 0 )
+            if( osEName.empty() )
             {
                 CPLError( CE_Failure, CPLE_AppDefined,
                         "Failed to find ellipsoid %s in ozi_ellips.csv.",

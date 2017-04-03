@@ -27,13 +27,34 @@
  * DEALINGS IN THE SOFTWARE.
  ****************************************************************************/
 
+#include "cpl_port.h"
 #include "ogr_csv.h"
-#include "cpl_conv.h"
-#include "cpl_string.h"
-#include "cpl_csv.h"
-#include "ogr_p.h"
 
+#include <cerrno>
+#include <climits>
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#if HAVE_FCNTL_H
+#  include <fcntl.h>
+#endif
 #include <algorithm>
+#include <string>
+#include <vector>
+
+#include "cpl_conv.h"
+#include "cpl_csv.h"
+#include "cpl_error.h"
+#include "cpl_string.h"
+#include "cpl_vsi.h"
+#include "ogr_api.h"
+#include "ogr_core.h"
+#include "ogr_feature.h"
+#include "ogr_geometry.h"
+#include "ogr_p.h"
+#include "ogr_spatialref.h"
+#include "ogrsf_frmts.h"
 
 CPL_CVSID("$Id$");
 
@@ -750,6 +771,26 @@ void OGRCSVLayer::BuildFeatureDefn( const char* pszNfdcGeomField,
                 oGeomFieldDefn.SetType(wkbMultiLineString);
             else if( strstr(pszFieldName, "_MULTIPOLYGON") )
                 oGeomFieldDefn.SetType(wkbMultiPolygon);
+             else if( strstr(pszFieldName, "_CIRCULARSTRING") )
+                oGeomFieldDefn.SetType(wkbCircularString);
+            else if( strstr(pszFieldName, "_COMPOUNDCURVE") )
+                oGeomFieldDefn.SetType(wkbCompoundCurve);
+            else if( strstr(pszFieldName, "_CURVEPOLYGON") )
+                oGeomFieldDefn.SetType(wkbCurvePolygon);
+            else if( strstr(pszFieldName, "_CURVE") )
+                oGeomFieldDefn.SetType(wkbCurve);
+            else if( strstr(pszFieldName, "_SURFACE") )
+                oGeomFieldDefn.SetType(wkbSurface);
+            else if( strstr(pszFieldName, "_MULTICURVE") )
+                oGeomFieldDefn.SetType(wkbMultiCurve);
+            else if( strstr(pszFieldName, "_MULTISURFACE") )
+                oGeomFieldDefn.SetType(wkbMultiSurface);
+            else if( strstr(pszFieldName, "_POLYHEDRALSURFACE") )
+                oGeomFieldDefn.SetType(wkbPolyhedralSurface);
+            else if( strstr(pszFieldName, "_TIN") )
+                oGeomFieldDefn.SetType(wkbTIN);
+            else if( strstr(pszFieldName, "_TRIANGLE") )
+                oGeomFieldDefn.SetType(wkbTriangle);
 
             poFeatureDefn->AddGeomFieldDefn(&oGeomFieldDefn);
             if( !bKeepGeomColumns )
@@ -1049,8 +1090,8 @@ char** OGRCSVLayer::AutodetectFieldTypes(char** papszOpenOptions, int nFieldCoun
                 break;
             }
 
-            for( int iField = 0; papszTokens[iField] != NULL &&
-                             iField < nFieldCount; iField++ )
+            for( int iField = 0; iField < nFieldCount &&
+                                 papszTokens[iField] != NULL; iField++ )
             {
                 if( papszTokens[iField][0] == 0 )
                     continue;
@@ -1561,7 +1602,7 @@ OGRFeature * OGRCSVLayer::GetNextUnfilteredFeature()
             {
                 poFeature->SetField( iOGRField, papszTokens[iAttr] );
                 if( !bWarningBadTypeOrWidth &&
-                    !poFeature->IsFieldSet(iOGRField) )
+                    !poFeature->IsFieldSetAndNotNull(iOGRField) )
                 {
                     bWarningBadTypeOrWidth = true;
                     CPLError(CE_Warning, CPLE_AppDefined,
@@ -1571,10 +1612,13 @@ OGRFeature * OGRCSVLayer::GetNextUnfilteredFeature()
                 }
             }
         }
-        else
+        else if( !poFieldDefn->IsIgnored() )
         {
-            if( !poFieldDefn->IsIgnored() &&
-                (!bEmptyStringNull || papszTokens[iAttr][0] != '\0') )
+            if( bEmptyStringNull && papszTokens[iAttr][0] == '\0' )
+            {
+                poFeature->SetFieldNull( iOGRField );
+            }
+            else
             {
                 poFeature->SetField( iOGRField, papszTokens[iAttr] );
                 if( !bWarningBadTypeOrWidth && poFieldDefn->GetWidth() > 0 &&
@@ -2273,7 +2317,7 @@ OGRErr OGRCSVLayer::ICreateFeature( OGRFeature *poNewFeature )
             if ( eType == OFTReal)
             {
                 if( poFeatureDefn->GetFieldDefn(iField)->GetSubType() == OFSTFloat32 &&
-                    poNewFeature->IsFieldSet(iField) )
+                    poNewFeature->IsFieldSetAndNotNull(iField) )
                 {
                     pszEscaped = CPLStrdup(CPLSPrintf("%.8g", poNewFeature->GetFieldAsDouble(iField)));
                 }

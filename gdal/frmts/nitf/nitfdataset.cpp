@@ -30,14 +30,36 @@
  * DEALINGS IN THE SOFTWARE.
  ****************************************************************************/
 
-#include "cpl_csv.h"
-#include "cpl_string.h"
-#include "gdal_frmts.h"
+#include "cpl_port.h"
 #include "nitfdataset.h"
+
 #include "gdal_mdreader.h"
 
+#include <cmath>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#if HAVE_FCNTL_H
+#  include <fcntl.h>
+#endif
 #include <algorithm>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "cpl_conv.h"
+#include "cpl_csv.h"
+#include "cpl_error.h"
+#include "cpl_minixml.h"
+#include "cpl_progress.h"
+#include "cpl_string.h"
+#include "cpl_vsi.h"
+#include "gdal.h"
+#include "gdal_frmts.h"
+#include "gdal_priv.h"
+#include "ogr_api.h"
+#include "ogr_core.h"
+#include "ogr_srs_api.h"
 
 CPL_CVSID("$Id$");
 
@@ -1710,7 +1732,7 @@ static OGRErr LoadDODDatum( OGRSpatialReference *poSRS,
 
     CPLString osDName = CSVGetField( pszGTDatum, "CODE", szExpanded,
                                      CC_ApproxString, "NAME" );
-    if( strlen(osDName) == 0 )
+    if( osDName.empty() )
     {
         CPLError( CE_Failure, CPLE_AppDefined,
                   "Failed to find datum %s/%s in gt_datum.csv.",
@@ -1734,7 +1756,7 @@ static OGRErr LoadDODDatum( OGRSpatialReference *poSRS,
 
     CPLString osEName = CSVGetField( pszGTEllipse, "CODE", osEllipseCode,
                                      CC_ApproxString, "NAME" );
-    if( strlen(osEName) == 0 )
+    if( osEName.empty() )
     {
         CPLError( CE_Failure, CPLE_AppDefined,
                   "Failed to find datum %s in gt_ellips.csv.",
@@ -2389,7 +2411,7 @@ void NITFDataset::InitializeNITFDESs()
         }
     }
 
-    if (aosList.size() > 0)
+    if (!aosList.empty())
         oSpecialMD.SetMetadata( aosList.List(), pszDESsDomain );
 }
 
@@ -2499,7 +2521,7 @@ void NITFDataset::InitializeNITFTREs()
             pszTREData += (nThisTRESize + 11);
         }
 
-        if (aosList.size() > 0)
+        if (!aosList.empty())
             oSpecialMD.SetMetadata( aosList.List(), pszTREsDomain );
     }
 }
@@ -3150,7 +3172,7 @@ const char *NITFDataset::GetMetadataItem(const char * pszName,
     }
 
     if( pszDomain != NULL && EQUAL(pszDomain,"OVERVIEWS")
-        && osRSetVRT.size() > 0 )
+        && !osRSetVRT.empty() )
         return osRSetVRT;
 
     return GDALPamDataset::GetMetadataItem( pszName, pszDomain );
@@ -3236,7 +3258,7 @@ int NITFDataset::CheckForRSets( const char *pszNITFFilename,
         aosRSetFilenames.push_back( osTarget );
     }
 
-    if( aosRSetFilenames.size() == 0 )
+    if( aosRSetFilenames.empty() )
         return FALSE;
 
 /* -------------------------------------------------------------------- */
@@ -3292,7 +3314,7 @@ CPLErr NITFDataset::IBuildOverviews( const char *pszResampling,
 /* -------------------------------------------------------------------- */
 /*      If we have been using RSets we will need to clear them first.   */
 /* -------------------------------------------------------------------- */
-    if( osRSetVRT.size() > 0 )
+    if( !osRSetVRT.empty() )
     {
         oOvManager.CleanOverviews();
         osRSetVRT = "";
@@ -3659,6 +3681,10 @@ char **NITFDataset::GetFileList()
 
 {
     char **papszFileList = GDALPamDataset::GetFileList();
+
+    // Small optimization to avoid useless file probing.
+    if( CSLCount(papszFileList) == 0 )
+        return papszFileList;
 
 /* -------------------------------------------------------------------- */
 /*      Check for .imd file.                                            */
@@ -4466,7 +4492,7 @@ NITFDataset::NITFCreateCopy(
                 osRPC00B += pszRPC;
                 papszFullOptions = CSLAddString( papszFullOptions, osRPC00B ) ;
 
-                // If no precision loss occured during RPC conversion, then
+                // If no precision loss occurred during RPC conversion, then
                 // we can suppress it from PAM
                 if( !bPrecisionLoss )
                     nGCIFFlags &= ~GCIF_METADATA;
@@ -5289,7 +5315,7 @@ static bool NITFWriteTextSegments( const char *pszFilename,
 /* -------------------------------------------------------------------- */
 
         const char *pszHeaderBuffer = NULL;
-        for( int iOpt2 = 0; papszList != NULL && papszList[iOpt2] != NULL; iOpt2++ ) {
+        for( int iOpt2 = 0; papszList[iOpt2] != NULL; iOpt2++ ) {
             if( !STARTS_WITH_CI(papszList[iOpt2], "HEADER_") )
                 continue;
 
@@ -5406,7 +5432,7 @@ static bool NITFWriteTextSegments( const char *pszFilename,
 /* -------------------------------------------------------------------- */
 /*      Update the subheader and data size info in the file header.     */
 /* -------------------------------------------------------------------- */
-        snprintf( pachLT + 9*iTextSeg+0, 9+1, "%04d%05d",
+        CPLsnprintf( pachLT + 9*iTextSeg+0, 9+1, "%04d%05d",
                  static_cast<int>( sizeof( achTSH ) ), nTextLength );
 
         iTextSeg++;

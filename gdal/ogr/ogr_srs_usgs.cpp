@@ -28,12 +28,19 @@
  * DEALINGS IN THE SOFTWARE.
  ****************************************************************************/
 
-#include "ogr_spatialref.h"
-#include "cpl_conv.h"
-#include "cpl_csv.h"
-#include "ogr_p.h"
+#include "cpl_port.h"
+#include "ogr_srs_api.h"
 
 #include <cmath>
+#include <cstddef>
+
+#include "cpl_conv.h"
+#include "cpl_csv.h"
+#include "cpl_error.h"
+#include "cpl_string.h"
+#include "ogr_core.h"
+#include "ogr_p.h"
+#include "ogr_spatialref.h"
 
 CPL_CVSID("$Id$");
 
@@ -609,7 +616,7 @@ OGRErr OGRSpatialReference::importFromUSGS( long iProjSys, long iZone,
                         pfnUnpackAnglesFn(padfPrjParams[4]),
                         pfnUnpackAnglesFn(padfPrjParams[3]),
                         0.0, padfPrjParams[2],
-                        padfPrjParams[6],  padfPrjParams[7] );
+                        padfPrjParams[6], padfPrjParams[7] );
             }
             else
             {
@@ -619,7 +626,7 @@ OGRErr OGRSpatialReference::importFromUSGS( long iProjSys, long iZone,
                             pfnUnpackAnglesFn(padfPrjParams[11]),
                             pfnUnpackAnglesFn(padfPrjParams[10]),
                             padfPrjParams[2],
-                            padfPrjParams[6],  padfPrjParams[7] );
+                            padfPrjParams[6], padfPrjParams[7] );
             }
             break;
 
@@ -673,7 +680,7 @@ OGRErr OGRSpatialReference::importFromUSGS( long iProjSys, long iZone,
         double dfSemiMajor = 0.0;
         double dfInvFlattening = 0.0;
 
-        if( iDatum < 0  ) // Use specified ellipsoid parameters.
+        if( iDatum < 0 ) // Use specified ellipsoid parameters.
         {
             if( padfPrjParams[0] > 0.0 )
             {
@@ -765,8 +772,7 @@ OGRErr OGRSpatialReference::importFromUSGS( long iProjSys, long iZone,
             SetWellKnownGeogCS( "WGS84" );
         }
 
-        if( pszName )
-            CPLFree( pszName );
+        CPLFree( pszName );
     }
 
 /* -------------------------------------------------------------------- */
@@ -833,7 +839,7 @@ OGRErr OGRSpatialReference::exportToUSGS( long *piProjSys, long *piZone,
                                           long *piDatum ) const
 
 {
-    const char  *pszProjection = GetAttrValue("PROJECTION");
+    const char *pszProjection = GetAttrValue("PROJECTION");
 
 /* -------------------------------------------------------------------- */
 /*      Fill all projection parameters with zero.                       */
@@ -1138,7 +1144,7 @@ OGRErr OGRSpatialReference::exportToUSGS( long *piProjSys, long *piZone,
 /* -------------------------------------------------------------------- */
 /*      Translate the datum.                                            */
 /* -------------------------------------------------------------------- */
-    const char  *pszDatum = GetAttrValue( "DATUM" );
+    const char *pszDatum = GetAttrValue( "DATUM" );
 
     if( pszDatum )
     {

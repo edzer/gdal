@@ -28,14 +28,23 @@
  * DEALINGS IN THE SOFTWARE.
  ****************************************************************************/
 
-#include "osr_cs_wkt.h"
+#include "cpl_port.h"
+#include "ogr_srs_api.h"
+
+#include <cstdlib>
+
+#include "cpl_conv.h"
+#include "cpl_error.h"
+#include "cpl_string.h"
+#include "ogr_core.h"
 #include "ogr_p.h"
 #include "ogr_spatialref.h"
+#include "osr_cs_wkt.h"
 
 CPL_CVSID("$Id$");
 
-/* why would fipszone and zone be parameters when they relate to a composite
-   projection which renders done into a non-zoned projection? */
+// Why would fipszone and zone be parameters when they relate to a composite
+// projection which renders down into a non-zoned projection?
 
 static const char * const papszParameters[] =
 {
@@ -705,7 +714,7 @@ OGRErr OGRSpatialReference::Validate(OGR_SRSNode *poRoot)
                 OGRErr eErr = ValidateAxis(poNode);
                 if( eErr != OGRERR_NONE )
                     return eErr;
-                nCountAxis ++;
+                nCountAxis++;
             }
             else if( EQUAL(poNode->GetValue(), "AUTHORITY") )
             {
@@ -794,7 +803,7 @@ OGRErr OGRSpatialReference::Validate(OGR_SRSNode *poRoot)
                 OGRErr eErr = ValidateAxis(poNode);
                 if( eErr != OGRERR_NONE )
                     return eErr;
-                nCountAxis ++;
+                nCountAxis++;
             }
             else if( EQUAL(poNode->GetValue(), "AUTHORITY") )
             {
@@ -856,7 +865,7 @@ OGRErr OGRSpatialReference::Validate(OGR_SRSNode *poRoot)
 
             if( EQUAL(poNode->GetValue(), "GEOGCS") )
             {
-                /* validated elsewhere */
+                // Validated elsewhere.
             }
             else if( EQUAL(poNode->GetValue(), "UNIT") )
             {
@@ -1212,7 +1221,7 @@ OGRErr OGRSpatialReference::ValidateProjection(OGR_SRSNode *poRoot)
 {
     OGR_SRSNode *poPROJCS = poRoot->GetNode( "PROJCS" );
 
-    if( poPROJCS == NULL  )
+    if( poPROJCS == NULL )
         return OGRERR_NONE;
 
     if( poPROJCS->GetNode( "PROJECTION" ) == NULL )

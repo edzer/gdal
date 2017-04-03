@@ -33,16 +33,7 @@
 
 #include "ogr_p.h"
 
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunknown-pragmas"
-#pragma clang diagnostic ignored "-Wdocumentation"
-#endif
-#include "json.h"
-#ifdef __clang
-#pragma clang diagnostic pop
-#endif
-
+#include "ogr_json_header.h"
 
 CPL_CVSID("$Id$");
 
@@ -56,12 +47,12 @@ class GMLASBinInputStream : public BinInputStream
 
 public :
 
-             GMLASBinInputStream(VSILFILE* fp);
+    explicit GMLASBinInputStream(VSILFILE* fp);
     virtual ~GMLASBinInputStream();
 
-    virtual XMLFilePos curPos() const;
-    virtual XMLSize_t readBytes(XMLByte* const toFill, const XMLSize_t maxToRead);
-    virtual const XMLCh* getContentType() const ;
+    virtual XMLFilePos curPos() const override;
+    virtual XMLSize_t readBytes(XMLByte* const toFill, const XMLSize_t maxToRead) override;
+    virtual const XMLCh* getContentType() const override ;
 };
 
 /************************************************************************/
@@ -118,11 +109,11 @@ GMLASInputSource::GMLASInputSource(const char* pszFilename,
                                    VSILFILE* fp,
                                    bool bOwnFP,
                                    MemoryManager* const manager)
-    : InputSource(manager)
+    : InputSource(manager),
+      m_osFilename( pszFilename )
 {
     m_fp = fp;
     m_bOwnFP = bOwnFP;
-    m_osFilename = pszFilename;
     XMLCh* pFilename = XMLString::transcode(pszFilename);
     setPublicId(pFilename);
     setSystemId(pFilename);
@@ -214,11 +205,27 @@ void GMLASErrorHandler::handle (const SAXParseException& e, CPLErr eErr)
     if ( resourceId == NULL || resourceId[0] == 0 )
         resourceId = e.getSystemId();
 
+    CPLString osErrorMsg(transcode(e.getMessage()));
+    if( m_bSchemaFullChecking &&
+        osErrorMsg.find("forbidden restriction of any particle") !=
+                                                            std::string::npos )
+    {
+        osErrorMsg += ". You may retry with the " +
+                      CPLString(szSCHEMA_FULL_CHECKING_OPTION) +
+                      "=NO open option";
+    }
+    else if( !m_bHandleMultipleImports && osErrorMsg.find("not found") !=
+                                                            std::string::npos )
+    {
+        osErrorMsg += ". You may retry with the " +
+                      CPLString(szHANDLE_MULTIPLE_IMPORTS_OPTION) +
+                      "=YES open option";
+    }
     CPLError(eErr, CPLE_AppDefined, "%s:%d:%d %s",
              transcode(resourceId).c_str(),
              static_cast<int>(e.getLineNumber()),
              static_cast<int>(e.getColumnNumber()),
-             transcode(e.getMessage()).c_str());
+             osErrorMsg.c_str());
 }
 
 /************************************************************************/
@@ -285,7 +292,18 @@ InputSource* GMLASBaseEntityResolver::resolveEntity(
                                                 const XMLCh* const /*publicId*/,
                                                 const XMLCh* const systemId)
 {
+    // Can happen on things like <xs:import namespace="http://www.w3.org/XML/1998/namespace"/>
+    if( systemId == NULL )
+        return NULL;
+
     CPLString osSystemId(transcode(systemId));
+
+    if( osSystemId.find("/gml/2.1.2/") != std::string::npos )
+        m_osGMLVersionFound = "2.1.2";
+    else if( osSystemId.find("/gml/3.1.1/") != std::string::npos )
+        m_osGMLVersionFound = "3.1.1";
+    else if( osSystemId.find("/gml/3.2.1/") != std::string::npos )
+        m_osGMLVersionFound = "3.2.1";
 
     CPLString osNewPath;
     VSILFILE* fp = m_oCache.Open(osSystemId,
@@ -294,6 +312,12 @@ InputSource* GMLASBaseEntityResolver::resolveEntity(
 
     if( fp != NULL )
     {
+        if( osNewPath.find("/vsicurl_streaming/") == 0 )
+            m_oSetSchemaURLs.insert(
+                            osNewPath.substr(strlen("/vsicurl_streaming/")));
+        else
+            m_oSetSchemaURLs.insert(osNewPath);
+
         CPLDebug("GMLAS", "Opening %s", osNewPath.c_str());
         DoExtraSchemaProcessing( osNewPath, fp );
     }
@@ -308,7 +332,7 @@ InputSource* GMLASBaseEntityResolver::resolveEntity(
 /*                             Dump()                                   */
 /************************************************************************/
 
-void GMLASReader::Context::Dump()
+void GMLASReader::Context::Dump() const
 {
     CPLDebug("GMLAS", "Context");
     CPLDebug("GMLAS", "  m_nLevel = %d", m_nLevel);
@@ -387,14 +411,26 @@ GMLASReader::~GMLASReader()
     if( m_oCurCtxt.m_poFeature != NULL && !m_aoStackContext.empty() &&
         m_oCurCtxt.m_poFeature != m_aoStackContext.back().m_poFeature )
     {
+        CPLDebug("GMLAS", "Delete feature m_oCurCtxt.m_poFeature=%p",
+                 m_oCurCtxt.m_poFeature);
         delete m_oCurCtxt.m_poFeature;
     }
     for( size_t i = 0; i < m_aoStackContext.size(); i++ )
     {
-        delete m_aoStackContext[i].m_poFeature;
+        if( i == 0 ||
+            (i > 0 && m_aoStackContext[i].m_poFeature !=
+                                        m_aoStackContext[i-1].m_poFeature) )
+        {
+            CPLDebug("GMLAS",
+                     "Delete feature m_aoStackContext[%d].m_poFeature=%p",
+                    static_cast<int>(i), m_aoStackContext[i].m_poFeature);
+            delete m_aoStackContext[i].m_poFeature;
+        }
     }
     for( size_t i = 0; i < m_aoFeaturesReady.size(); i++ )
     {
+        CPLDebug("GMLAS", "Delete feature m_aoFeaturesReady[%d].first=%p",
+                 static_cast<int>(i), m_aoFeaturesReady[i].first);
         delete m_aoFeaturesReady[i].first;
     }
     if( !m_apsXMLNodeStack.empty() )
@@ -422,7 +458,9 @@ bool GMLASReader::LoadXSDInParser( SAX2XMLReader* poParser,
                                    GMLASBaseEntityResolver& oXSDEntityResolver,
                                    const CPLString& osBaseDirname,
                                    const CPLString& osXSDFilename,
-                                   Grammar** ppoGrammar )
+                                   Grammar** ppoGrammar,
+                                   bool bSchemaFullChecking,
+                                   bool bHandleMultipleImports )
 {
     if( ppoGrammar != NULL )
         *ppoGrammar = NULL;
@@ -441,6 +479,11 @@ bool GMLASReader::LoadXSDInParser( SAX2XMLReader* poParser,
         return false;
     }
 
+    poParser->setFeature (XMLUni::fgXercesSchemaFullChecking,
+                            bSchemaFullChecking);
+    poParser->setFeature( XMLUni::fgXercesHandleMultipleImports,
+                            bHandleMultipleImports );
+
     // Install a temporary entity resolved based on the current XSD
     CPLString osXSDDirname( CPLGetDirname(osModifXSDFilename) );
     if( osXSDFilename.find("http://") == 0 ||
@@ -457,6 +500,8 @@ bool GMLASReader::LoadXSDInParser( SAX2XMLReader* poParser,
 
     // Install a temporary error handler
     GMLASErrorHandler oErrorHandler;
+    oErrorHandler.SetSchemaFullCheckingEnabled( bSchemaFullChecking );
+    oErrorHandler.SetHandleMultipleImportsEnabled( bHandleMultipleImports );
     ErrorHandler* poOldErrorHandler = poParser->getErrorHandler();
     poParser->setErrorHandler( &oErrorHandler);
 
@@ -496,7 +541,9 @@ bool GMLASReader::Init(const char* pszFilename,
                        const std::map<CPLString, CPLString>& oMapURIToPrefix,
                        std::vector<OGRGMLASLayer*>* papoLayers,
                        bool bValidate,
-                       const std::vector<PairURIFilename>& aoXSDs)
+                       const std::vector<PairURIFilename>& aoXSDs,
+                       bool bSchemaFullChecking,
+                       bool bHandleMultipleImports)
 {
     m_oMapURIToPrefix = oMapURIToPrefix;
     m_papoLayers = papoLayers;
@@ -513,14 +560,20 @@ bool GMLASReader::Init(const char* pszFilename,
     m_poSAXReader->setLexicalHandler( this );
     m_poSAXReader->setDTDHandler( this );
 
+    m_oErrorHandler.SetSchemaFullCheckingEnabled( bSchemaFullChecking );
+    m_oErrorHandler.SetHandleMultipleImportsEnabled( bHandleMultipleImports );
     m_poSAXReader->setErrorHandler(&m_oErrorHandler);
+
+    m_poSAXReader->setFeature (XMLUni::fgXercesSchemaFullChecking,
+                            bSchemaFullChecking);
+    m_poSAXReader->setFeature( XMLUni::fgXercesHandleMultipleImports,
+                            bHandleMultipleImports );
 
     if( bValidate )
     {
         // Enable validation.
         m_poSAXReader->setFeature (XMLUni::fgSAX2CoreValidation, true);
         m_poSAXReader->setFeature (XMLUni::fgXercesSchema, true);
-        m_poSAXReader->setFeature (XMLUni::fgXercesSchemaFullChecking, true);
 
         // We want all errors to be reported
         m_poSAXReader->setFeature (XMLUni::fgXercesValidationErrorAsFatal, false);
@@ -537,7 +590,10 @@ bool GMLASReader::Init(const char* pszFilename,
                 const CPLString osXSDFilename(aoXSDs[i].second);
                 if( !LoadXSDInParser( m_poSAXReader, m_oCache,
                                       oXSDEntityResolver,
-                                      osBaseDirname, osXSDFilename ) )
+                                      osBaseDirname, osXSDFilename,
+                                      NULL,
+                                      bSchemaFullChecking,
+                                      bHandleMultipleImports) )
                 {
                     return false;
                 }
@@ -660,6 +716,23 @@ void GMLASReader::SetField( OGRFeature* poFeature,
             poLayer->GetFeatureClass().GetFields()[nFCFieldIdx].IsList() )
         {
             char** papszTokens = CSLTokenizeString2( osAttrValue.c_str(), " ", 0 );
+            if( eType == OFTIntegerList &&
+                poFeature->GetFieldDefnRef(nAttrIdx)->GetSubType() == OFSTBoolean )
+            {
+                for( char** papszIter = papszTokens; *papszIter != NULL; ++papszIter )
+                {
+                    if( strcmp(*papszIter, "true") == 0 )
+                    {
+                        (*papszIter)[0] = '1';
+                        (*papszIter)[1] = '\0';
+                    }
+                    else if( strcmp(*papszIter, "false") == 0 )
+                    {
+                        (*papszIter)[0] = '0';
+                        (*papszIter)[1] = '\0';
+                    }
+                }
+            }
             poFeature->SetField( nAttrIdx, papszTokens );
             CSLDestroy(papszTokens);
         }
@@ -681,6 +754,11 @@ void GMLASReader::SetField( OGRFeature* poFeature,
 void GMLASReader::PushFeatureReady( OGRFeature* poFeature,
                                     OGRGMLASLayer* poLayer )
 {
+#ifdef DEBUG_VERBOSE
+    CPLDebug("GMLAS", "PushFeatureReady(%p / %s / %s)",
+             poFeature, poFeature->GetDefnRef()->GetName(), poLayer->GetName());
+#endif
+
     m_aoFeaturesReady.push_back(
         std::pair<OGRFeature*, OGRGMLASLayer*>(poFeature, poLayer) );
 }
@@ -691,12 +769,13 @@ void GMLASReader::PushFeatureReady( OGRFeature* poFeature,
 
 void GMLASReader::CreateNewFeature(const CPLString& osLocalname)
 {
-#ifdef DEBUG_VERBOSE
-    CPLDebug("GMLAS", "CreateNewFeature(%s)", osLocalname.c_str());
-#endif
     m_oCurCtxt.m_poFeature = new OGRFeature(
                 m_oCurCtxt.m_poLayer->GetLayerDefn() );
-
+#ifdef DEBUG_VERBOSE
+    CPLDebug("GMLAS", "CreateNewFeature(element=%s / layer=%s) = %p",
+             osLocalname.c_str(), m_oCurCtxt.m_poLayer->GetName(),
+             m_oCurCtxt.m_poFeature);
+#endif
     // Assign FID (1, ...). Only for OGR compliance, but definitely
     // not a unique ID among datasets with the same schema
     ++m_oMapGlobalCounter[m_oCurCtxt.m_poLayer];
@@ -849,6 +928,9 @@ void GMLASReader::BuildXMLBlobStartElement(const CPLString& osXPath,
         sNewNodeLastChild.psNode = psNode;
         sNewNodeLastChild.psLastChild = psLastChild;
         m_apsXMLNodeStack.push_back(sNewNodeLastChild);
+#ifdef DEBUG_VERBOSE
+        CPLDebug("GMLAS", "m_apsXMLNodeStack.push_back()");
+#endif
     }
 
     if( m_osTextContent.size() > m_nMaxContentSize )
@@ -873,6 +955,42 @@ OGRGMLASLayer* GMLASReader::GetLayerByXPath( const CPLString& osXPath )
         }
     }
     return NULL;
+}
+
+/************************************************************************/
+/*                            PushContext()                             */
+/************************************************************************/
+
+void GMLASReader::PushContext( const Context& oContext )
+{
+    m_aoStackContext.push_back( oContext );
+#ifdef DEBUG_VERBOSE
+    CPLDebug("GMLAS", "Pushing new context:");
+    oContext.Dump();
+#endif
+}
+
+/************************************************************************/
+/*                            PopContext()                              */
+/************************************************************************/
+
+void GMLASReader::PopContext()
+{
+#ifdef DEBUG_VERBOSE
+    if( !m_aoStackContext.empty() )
+    {
+        CPLDebug("GMLAS", "Poping up context:");
+        m_aoStackContext.back().Dump();
+    }
+#endif
+    m_aoStackContext.pop_back();
+#ifdef DEBUG_VERBOSE
+    if( !m_aoStackContext.empty() )
+    {
+        CPLDebug("GMLAS", "New top of stack is:");
+        m_aoStackContext.back().Dump();
+    }
+#endif
 }
 
 /************************************************************************/
@@ -914,7 +1032,7 @@ OGRGMLASLayer* GMLASReader::GetLayerByXPath( const CPLString& osXPath )
     *
               <first_elt_of_group>...</first_elt_of_group>
               <first_elt_of_another_group>  <!-- we are here at startElement() -->
-                ...</first_elt_of_group>
+                ...</first_elt_of_another_group>
 
     *
               <first_elt_of_group>...</first_elt_of_group>
@@ -991,14 +1109,16 @@ void GMLASReader::startElement(
     // Look which layer might match the current XPath
     for(size_t i = 0; i < m_papoLayers->size(); i++ )
     {
-        CPLString& osLayerXPath(m_osLayerXPath);
-        osLayerXPath = (*m_papoLayers)[i]->GetFeatureClass().GetXPath();
+        const CPLString* posLayerXPath =
+            &((*m_papoLayers)[i]->GetFeatureClass().GetXPath());
         if( (*m_papoLayers)[i]->GetFeatureClass().IsRepeatedSequence() )
         {
-            size_t iPosExtra = osLayerXPath.find(";extra=");
+            size_t iPosExtra = posLayerXPath->find(szEXTRA_SUFFIX);
             if (iPosExtra != std::string::npos)
             {
-                osLayerXPath.resize(iPosExtra);
+                m_osLayerXPath = *posLayerXPath;
+                m_osLayerXPath.resize(iPosExtra);
+                posLayerXPath = &m_osLayerXPath;
             }
         }
 
@@ -1014,17 +1134,18 @@ void GMLASReader::startElement(
              m_oCurCtxt.m_poLayer != NULL &&
              m_oCurCtxt.m_poLayer != (*m_papoLayers)[i] &&
              m_oCurCtxt.m_poLayer->GetFeatureClass().GetXPath() ==
-                    osLayerXPath &&
+                    *posLayerXPath &&
              (*m_papoLayers)[i]->GetOGRFieldIndexFromXPath(m_osCurSubXPath) >= 0);
 
+        int nTmpIdx;
         if( // Case where we haven't yet entered the top-level element, which may
             // be in container elements
             (m_osCurSubXPath.empty() &&
-             osLayerXPath == osXPath && !bIsGroup) ||
+             *posLayerXPath == osXPath && !bIsGroup) ||
 
             // Case where we are a sub-element of a top-level feature
             (!m_osCurSubXPath.empty() &&
-             osLayerXPath == m_osCurSubXPath && !bIsGroup) ||
+             *posLayerXPath == m_osCurSubXPath && !bIsGroup) ||
 
             // Case where we are a sub-element of a (repeated) group of a
             // top-level feature
@@ -1037,7 +1158,8 @@ void GMLASReader::startElement(
             // of a top-level feature to a regular sub-element of that top-level
             // feature
             (m_oCurCtxt.m_poGroupLayer != NULL &&
-             (*m_papoLayers)[i]->GetOGRFieldIndexFromXPath(m_osCurSubXPath) >= 0) )
+             ((nTmpIdx = (*m_papoLayers)[i]->GetOGRFieldIndexFromXPath(m_osCurSubXPath)) >= 0 ||
+              nTmpIdx == IDX_COMPOUND_FOLDED)) )
         {
 #ifdef DEBUG_VERBOSE
             CPLDebug("GMLAS", "Matches layer %s (%s)",
@@ -1170,7 +1292,6 @@ void GMLASReader::startElement(
                 {
                     // This is the case where we switch from an element that was
                     // in a group to a regular element of the same level
-                    // Cf group_case_C in above doc
 
                     // Push group feature as ready
                     CPLAssert( m_oCurCtxt.m_poFeature );
@@ -1192,7 +1313,7 @@ void GMLASReader::startElement(
                         oContext = m_oCurCtxt;
                         oContext.m_nLevel = -1;
                         oContext.Dump();
-                        m_aoStackContext.push_back( oContext );
+                        PushContext( oContext );
                     }
 
                     m_oCurCtxt.m_poFeature = NULL;
@@ -1216,7 +1337,7 @@ void GMLASReader::startElement(
                 Context oContext;
                 oContext = m_oCurCtxt;
                 oContext.m_nLevel = m_nLevel;
-                m_aoStackContext.push_back( oContext );
+                PushContext( oContext );
                 m_oCurCtxt.m_oMapCounter.clear();
             }
             break;
@@ -1229,6 +1350,7 @@ void GMLASReader::startElement(
         CPLDebug("GMLAS", "Current layer: %s", m_oCurCtxt.m_poLayer->GetName() );
 #endif
 
+
         bool bHasProcessedAttributes = false;
 
         // Find if we can match this element with one of our fields
@@ -1236,8 +1358,27 @@ void GMLASReader::startElement(
                             GetOGRFieldIndexFromXPath(m_osCurSubXPath);
         int geom_idx = m_oCurCtxt.m_poLayer->
                             GetOGRGeomFieldIndexFromXPath(m_osCurSubXPath);
+
+        if( idx < 0 && idx != IDX_COMPOUND_FOLDED )
+        {
+            /* Special case for a layer that matches everything, as found */
+            /* in swe:extension */
+            idx = m_oCurCtxt.m_poLayer->GetOGRFieldIndexFromXPath(
+              m_oCurCtxt.m_poLayer->GetFeatureClass().GetXPath() + szMATCH_ALL);
+        }
+
         if( idx >= 0 || geom_idx >= 0 )
         {
+            // Sanity check. Shouldn't normally happen !
+            if( m_oCurCtxt.m_poFeature == NULL ||
+                m_oCurCtxt.m_poLayer->GetLayerDefn() !=
+                                        m_oCurCtxt.m_poFeature->GetDefnRef() )
+            {
+                CPLError(CE_Failure, CPLE_AppDefined,
+                            "Inconsistent m_poLayer / m_poFeature state");
+                m_bParsingError = true;
+                return;
+            }
 
             bool bPushNewFeature = false;
             const int nFCFieldIdx = (idx >= 0) ?
@@ -1261,6 +1402,7 @@ void GMLASReader::startElement(
                         <subelement2>d</subelement>
                     </element_compound>
             */
+
             if( idx >= 0 && idx < m_nCurFieldIdx )
             {
 #ifdef DEBUG_VERBOSE
@@ -1297,7 +1439,11 @@ void GMLASReader::startElement(
             // Make sure we are in a repeated sequence, otherwise this is
             // invalid XML
             if( bPushNewFeature &&
-                !m_oCurCtxt.m_poLayer->GetFeatureClass().IsRepeatedSequence() )
+                !m_oCurCtxt.m_poLayer->GetFeatureClass().IsRepeatedSequence() &&
+                // Case of element within xs:choice
+                !(idx >= 0 && nFCFieldIdx >= 0 &&
+                    m_oCurCtxt.m_poLayer->GetFeatureClass().
+                        GetFields()[nFCFieldIdx].MayAppearOutOfOrder()) )
             {
                 bPushNewFeature = false;
                 CPLError(CE_Warning, CPLE_AppDefined,
@@ -1373,6 +1519,10 @@ void GMLASReader::startElement(
                         m_oCurCtxt.m_poLayer = poSubLayer;
                         CreateNewFeature(osLocalname);
 
+                        m_oCurCtxt.m_poGroupLayer = NULL;
+                        m_oCurCtxt.m_nGroupLayerLevel = -1;
+                        m_oCurCtxt.m_nLastFieldIdxGroupLayer = -1;
+
                         // Install new context
                         Context oContext;
                         oContext = m_oCurCtxt;
@@ -1385,7 +1535,7 @@ void GMLASReader::startElement(
                                  oContext.m_osCurSubXPath.c_str(),
                                  m_osCurSubXPath.c_str());
 #endif
-                        m_aoStackContext.push_back( oContext );
+                        PushContext( oContext );
                         m_oCurCtxt.m_oMapCounter.clear();
 
                         // Process attributes now because we might need to
@@ -1443,7 +1593,8 @@ void GMLASReader::startElement(
                     CPLAssert( !osNestedXPath.empty() );
 
                     OGRGMLASLayer* poJunctionLayer = GetLayerByXPath(
-                                osAbstractElementXPath + "|" + osNestedXPath);
+                        GMLASSchemaAnalyzer::BuildJunctionTableXPath(
+                            osAbstractElementXPath, osNestedXPath));
                     OGRGMLASLayer* poSubLayer = GetLayerByXPath(osNestedXPath);
 
                     if( poSubLayer && poJunctionLayer )
@@ -1464,6 +1615,10 @@ void GMLASReader::startElement(
                         const int nCounter =
                             m_oCurCtxt.m_oMapCounter[poJunctionLayer];
 
+                        m_oCurCtxt.m_poGroupLayer = NULL;
+                        m_oCurCtxt.m_nGroupLayerLevel = -1;
+                        m_oCurCtxt.m_nLastFieldIdxGroupLayer = -1;
+
                         // Install new context
                         Context oContext;
                         oContext = m_oCurCtxt;
@@ -1476,7 +1631,7 @@ void GMLASReader::startElement(
                                  oContext.m_osCurSubXPath.c_str(),
                                  m_osCurSubXPath.c_str());
 #endif
-                        m_aoStackContext.push_back( oContext );
+                        PushContext( oContext );
                         m_oCurCtxt.m_oMapCounter.clear();
 
                         // Process attributes now because we might need to
@@ -1492,9 +1647,9 @@ void GMLASReader::startElement(
                         OGRFeature* poJunctionFeature =
                                 new OGRFeature(poJunctionLayer->GetLayerDefn());
                         poJunctionFeature->SetFID(nGlobalCounter);
-                        poJunctionFeature->SetField("occurrence", nCounter);
-                        poJunctionFeature->SetField("parent_pkid", osParentId);
-                        poJunctionFeature->SetField("child_pkid", osChildId);
+                        poJunctionFeature->SetField(szOCCURRENCE, nCounter);
+                        poJunctionFeature->SetField(szPARENT_PKID, osParentId);
+                        poJunctionFeature->SetField(szCHILD_PKID, osChildId);
                         PushFeatureReady(poJunctionFeature, poJunctionLayer);
                     }
                     idx = IDX_COMPOUND_FOLDED;
@@ -1513,8 +1668,8 @@ void GMLASReader::startElement(
                 !( m_oCurCtxt.m_poLayer->
                             GetFCFieldIndexFromXPath(m_osCurSubXPath) >= 0 &&
                     attrs.getLength() == 1 &&
-                    m_oMapURIToPrefix[ transcode( attrs.getURI(0) ) ] == "xsi" &&
-                    transcode(attrs.getLocalName(0)) == "nil" ) )
+                    m_oMapURIToPrefix[ transcode( attrs.getURI(0) ) ] == szXSI_PREFIX &&
+                    transcode(attrs.getLocalName(0)) == szNIL ) )
             {
                 CPLString osMatchedXPath;
                 if( m_oIgnoredXPathMatcher.MatchesRefXPath(
@@ -1581,7 +1736,8 @@ void GMLASReader::ProcessAttributes(const Attributes& attrs)
 {
     // Browse through attributes and match them with one of our fields
     const int nWildcardAttrIdx =
-        m_oCurCtxt.m_poLayer->GetOGRFieldIndexFromXPath(m_osCurSubXPath + "/@*");
+        m_oCurCtxt.m_poLayer->GetOGRFieldIndexFromXPath(m_osCurSubXPath + "/" +
+                                                        szAT_ANY_ATTR);
     json_object* poWildcard = NULL;
 
     for(unsigned int i=0; i < attrs.getLength(); i++)
@@ -1612,34 +1768,67 @@ void GMLASReader::ProcessAttributes(const Attributes& attrs)
             osAttrXPath += osAttrLocalname;
         }
 
-        int nAttrIdx = m_oCurCtxt.m_poLayer->GetOGRFieldIndexFromXPath(osAttrXPath);
+        const int nAttrIdx = m_oCurCtxt.m_poLayer->
+                                    GetOGRFieldIndexFromXPath(osAttrXPath);
         int nFCIdx;
         if( nAttrIdx >= 0 )
         {
-            SetField( m_oCurCtxt.m_poFeature,
-                        m_oCurCtxt.m_poLayer,
-                        nAttrIdx, osAttrValue );
+            const OGRFieldType eType(
+                m_oCurCtxt.m_poFeature->GetFieldDefnRef(nAttrIdx)->GetType());
+            if( osAttrValue.empty() && eType == OFTString  )
+            {
+                m_oCurCtxt.m_poFeature->SetField( nAttrIdx, "" );
+            }
+            else
+            {
+                SetField( m_oCurCtxt.m_poFeature,
+                          m_oCurCtxt.m_poLayer,
+                          nAttrIdx, osAttrValue );
+            }
 
-            if( osAttrNSPrefix == "xlink" &&
-                osAttrLocalname == "href" &&
+            if( osAttrNSPrefix == szXLINK_PREFIX &&
+                osAttrLocalname == szHREF &&
                 !osAttrValue.empty() )
             {
                 ProcessXLinkHref( osAttrXPath, osAttrValue );
             }
         }
 
-        else if( osAttrNSPrefix != "xmlns" &&
-                 osAttrLocalname != "xmlns" &&
-                    !(osAttrNSPrefix == "xsi" &&
-                        osAttrLocalname == "schemaLocation") &&
-                    !(osAttrNSPrefix == "xsi" &&
-                        osAttrLocalname == "noNamespaceSchemaLocation") &&
-                    !(osAttrNSPrefix == "xsi" &&
-                        osAttrLocalname == "nil") &&
+        else if( osAttrNSPrefix == szXSI_PREFIX &&
+                 osAttrLocalname == szNIL )
+        {
+            if( osAttrValue == "true" )
+            {
+                const int nMainAttrIdx = m_oCurCtxt.m_poLayer->
+                                        GetOGRFieldIndexFromXPath(m_osCurSubXPath);
+                if( nMainAttrIdx >= 0 )
+                {
+                    m_oCurCtxt.m_poFeature->SetFieldNull( nMainAttrIdx );
+                }
+                else
+                {
+                    const int nHrefAttrIdx = m_oCurCtxt.m_poLayer->
+                            GetOGRFieldIndexFromXPath(m_osCurSubXPath +
+                                        "/@" + szXLINK_PREFIX + ":" + szHREF);
+                    if( nHrefAttrIdx >= 0 )
+                    {
+                        m_oCurCtxt.m_poFeature->SetFieldNull( nHrefAttrIdx );
+                    }
+                }
+            }
+        }
+
+        else if( osAttrNSPrefix != szXMLNS_PREFIX &&
+                 osAttrLocalname != szXMLNS_PREFIX &&
+                    !(osAttrNSPrefix == szXSI_PREFIX &&
+                        osAttrLocalname == szSCHEMA_LOCATION) &&
+                    !(osAttrNSPrefix == szXSI_PREFIX &&
+                        osAttrLocalname == szNO_NAMESPACE_SCHEMA_LOCATION) &&
                     // Do not warn about fixed attributes on geometry properties
                     !(m_nCurGeomFieldIdx >= 0 && (
-                    (osAttrNSPrefix == "xlink" && osAttrLocalname == "type") ||
-                    (osAttrNSPrefix == "" && osAttrLocalname == "owns"))) )
+                    (osAttrNSPrefix == szXLINK_PREFIX &&
+                     osAttrLocalname == szTYPE) ||
+                    (osAttrNSPrefix == "" && osAttrLocalname == szOWNS))) )
         {
             CPLString osMatchedXPath;
             if( nWildcardAttrIdx >= 0 )
@@ -1733,7 +1922,7 @@ void GMLASReader::ProcessAttributes(const Attributes& attrs)
                 if( osFixedDefaultValue.empty() )
                     osFixedDefaultValue = aoFields[nFCIdx].GetDefaultValue();
                 if( !osFixedDefaultValue.empty() &&
-                    !m_oCurCtxt.m_poFeature->IsFieldSet(i) )
+                    !m_oCurCtxt.m_poFeature->IsFieldSetAndNotNull(i) )
                 {
                     SetField( m_oCurCtxt.m_poFeature,
                                 m_oCurCtxt.m_poLayer,
@@ -1770,7 +1959,7 @@ void GMLASReader::ProcessXLinkHref( const CPLString& osAttrXPath,
     else
     {
         const int nRuleIdx =
-                        m_oXLinkResolver.GetMachingResolutionRule(osAttrValue);
+                        m_oXLinkResolver.GetMatchingResolutionRule(osAttrValue);
         if( nRuleIdx >= 0 )
         {
             const GMLASXLinkResolutionConf::URLSpecificResolution& oRule(
@@ -1917,7 +2106,7 @@ void GMLASReader::ExploreXMLDoc( const CPLString& osAttrXPath,
             osVal = pszContent;
             CPLFree(pszContent);
         }
-        if( m_oCurCtxt.m_poFeature->IsFieldSet(nAttrIdx) &&
+        if( m_oCurCtxt.m_poFeature->IsFieldSetAndNotNull(nAttrIdx) &&
             m_oCurCtxt.m_poFeature->GetFieldDefnRef(nAttrIdx)->GetType() == OFTString )
         {
             osVal = m_oCurCtxt.m_poFeature->GetFieldAsString(nAttrIdx) +
@@ -1945,10 +2134,32 @@ void GMLASReader::ExploreXMLDoc( const CPLString& osAttrXPath,
 void GMLASReader::endElement(
             const   XMLCh* const    uri,
             const   XMLCh* const    localname,
-            const   XMLCh* const    /*qname*/
+            const   XMLCh* const
+#ifdef DEBUG_VERBOSE
+                                    qname
+#endif
         )
 {
     m_nLevel --;
+
+#ifdef DEBUG_VERBOSE
+    {
+        const CPLString& osLocalname( transcode(localname, m_osLocalname) );
+        const CPLString& osNSPrefix( m_osNSPrefix =
+                                m_oMapURIToPrefix[ transcode(uri, m_osNSUri) ] );
+        if( osNSPrefix.empty() )
+            m_osXPath = osLocalname;
+        else
+        {
+            m_osXPath.reserve( osNSPrefix.size() + 1 + osLocalname.size() );
+            m_osXPath = osNSPrefix;
+            m_osXPath += ":";
+            m_osXPath += osLocalname;
+        }
+    }
+    CPLDebug("GMLAS", "endElement(%s / %s)",
+             transcode(qname).c_str(), m_osXPath.c_str());
+#endif
 
     if( m_nLevelSilentIgnoredXPath == m_nLevel )
     {
@@ -1963,17 +2174,6 @@ void GMLASReader::endElement(
                 m_oCurCtxt.m_poFeature->GetFieldDefnRef(m_nCurFieldIdx)->GetType() :
             OFTString );
 
-        // Transform boolean values to something that OGR understands
-        if( (eType == OFTIntegerList || eType == OFTInteger) &&
-             m_oCurCtxt.m_poFeature->GetFieldDefnRef(m_nCurFieldIdx)->GetSubType() ==
-                                                                   OFSTBoolean )
-        {
-            if( m_osTextContent == "true" )
-                m_osTextContent = "1";
-            else
-                m_osTextContent = "0";
-        }
-
         // Assign XML content to field value
         if( IsArrayType(eType) )
         {
@@ -1982,9 +2182,9 @@ void GMLASReader::endElement(
             if( nFCFieldIdx >= 0 &&
                 m_oCurCtxt.m_poLayer->GetFeatureClass().GetFields()[nFCFieldIdx].IsList() )
             {
-                char** papszTokens = CSLTokenizeString2( m_osTextContent.c_str(), " ", 0 );
-                m_oCurCtxt.m_poFeature->SetField( m_nCurFieldIdx, papszTokens );
-                CSLDestroy(papszTokens);
+                SetField( m_oCurCtxt.m_poFeature,
+                          m_oCurCtxt.m_poLayer,
+                          m_nCurFieldIdx, m_osTextContent );
             }
             else if( m_nTextContentListEstimatedSize > m_nMaxContentSize )
             {
@@ -1994,6 +2194,17 @@ void GMLASReader::endElement(
             }
             else
             {
+                // Transform boolean values to something that OGR understands
+                if( eType == OFTIntegerList &&
+                    m_oCurCtxt.m_poFeature->GetFieldDefnRef(m_nCurFieldIdx)->
+                                                GetSubType() == OFSTBoolean )
+                {
+                    if( m_osTextContent == "true" )
+                        m_osTextContent = "1";
+                    else
+                        m_osTextContent = "0";
+                }
+
                 m_osTextContentList.AddString( m_osTextContent );
                 // 16 is an arbitrary number for the cost of a new entry in the
                 // string list
@@ -2030,11 +2241,6 @@ void GMLASReader::endElement(
     // Make sure to set field only if we are at the expected nesting level
     if( m_nCurGeomFieldIdx >= 0 && m_nLevel == m_nCurFieldLevel - 1 )
     {
-        if( m_bIsXMLBlobIncludeUpper )
-        {
-            m_apsXMLNodeStack.pop_back();
-        }
-
         if( !m_apsXMLNodeStack.empty() )
         {
             CPLAssert( m_apsXMLNodeStack.size() == 1 );
@@ -2054,8 +2260,13 @@ void GMLASReader::endElement(
     {
         if( m_nCurGeomFieldIdx >= 0 )
         {
-            if( m_nLevel >= m_nCurFieldLevel + 1 )
+            if( m_apsXMLNodeStack.size() > 1 )
+            {
+#ifdef DEBUG_VERBOSE
+                CPLDebug("GMLAS", "m_apsXMLNodeStack.pop_back()");
+#endif
                 m_apsXMLNodeStack.pop_back();
+            }
         }
 
         if(  !m_bInitialPass )
@@ -2087,8 +2298,14 @@ void GMLASReader::endElement(
         m_osTextContent.clear();
     }
 
-    if( !m_aoStackContext.empty() &&
-        m_aoStackContext.back().m_nLevel == m_nLevel )
+#ifdef DEBUG_VERBOSE
+    CPLDebug("GMLAS", "m_nLevel = %d", m_nLevel);
+#endif
+
+    // The while and not just if is needed when a group is at the end of an
+    // element
+    while( !m_aoStackContext.empty() &&
+           m_aoStackContext.back().m_nLevel >= m_nLevel )
     {
         std::map<OGRLayer*, int> oMapCounter = m_aoStackContext.back().m_oMapCounter;
         if( !m_aoStackContext.back().m_osCurSubXPath.empty() )
@@ -2103,7 +2320,7 @@ void GMLASReader::endElement(
 
         if( m_oCurCtxt.m_poGroupLayer == m_oCurCtxt.m_poLayer )
         {
-            m_aoStackContext.pop_back();
+            PopContext();
             CPLAssert( !m_aoStackContext.empty() );
             m_oCurCtxt.m_poLayer = m_aoStackContext.back().m_poLayer;
         }
@@ -2129,14 +2346,14 @@ void GMLASReader::endElement(
                 PushFeatureReady(m_oCurCtxt.m_poFeature,
                                  m_oCurCtxt.m_poLayer);
             }
-            m_aoStackContext.pop_back();
+            PopContext();
             if( !m_aoStackContext.empty() )
             {
                 m_oCurCtxt = m_aoStackContext.back();
                 m_oCurCtxt.m_osCurSubXPath.clear();
                 if( m_oCurCtxt.m_nLevel < 0 )
                 {
-                    m_aoStackContext.pop_back();
+                    PopContext();
                     CPLAssert( !m_aoStackContext.empty() );
                     m_oCurCtxt.m_poLayer = m_aoStackContext.back().m_poLayer;
                 }
@@ -2152,6 +2369,11 @@ void GMLASReader::endElement(
             m_nCurFieldIdx = -1;
         }
         m_oCurCtxt.m_oMapCounter = oMapCounter;
+
+#ifdef DEBUG_VERBOSE
+        CPLDebug("GMLAS", "m_oCurCtxt = ");
+        m_oCurCtxt.Dump();
+#endif
     }
 
     size_t nLastXPathLength = m_anStackXPathLength.back();
@@ -2183,7 +2405,7 @@ void GMLASReader::ProcessGeometry()
     if( m_bInitialPass )
     {
         const char* pszSRSName = CPLGetXMLValue(psInterestNode,
-                                                "srsName", NULL);
+                                                szSRS_NAME, NULL);
         if( pszSRSName != NULL )
         {
             // If we are doing a first pass, store the SRS of the geometry
@@ -2231,7 +2453,7 @@ void GMLASReader::ProcessGeometry()
     if( poGeom != NULL )
     {
         const char* pszSRSName = CPLGetXMLValue(psInterestNode,
-                                                "srsName", NULL);
+                                                szSRS_NAME, NULL);
         bool bSwapXY = false;
         if( pszSRSName != NULL )
         {
@@ -2557,7 +2779,8 @@ OGRFeature* GMLASReader::GetNextFeature( OGRGMLASLayer** ppoBelongingLayer,
 bool GMLASReader::RunFirstPass(GDALProgressFunc pfnProgress,
                                void* pProgressData,
                                bool bRemoveUnusedLayers,
-                               bool bRemoveUnusedFields)
+                               bool bRemoveUnusedFields,
+                               std::set<CPLString>& aoSetRemovedLayerNames)
 {
     m_bInitialPass = true;
 
@@ -2607,7 +2830,7 @@ bool GMLASReader::RunFirstPass(GDALProgressFunc pfnProgress,
             int nFieldCount = poFDefn->GetFieldCount();
             for(int j=0; j< nFieldCount; j++ )
             {
-                if( poFeature->IsFieldSet(j) )
+                if( poFeature->IsFieldSetAndNotNull(j) )
                     oSetUnusedFields.erase(j);
             }
         }
@@ -2629,6 +2852,7 @@ bool GMLASReader::RunFirstPass(GDALProgressFunc pfnProgress,
             }
             else
             {
+                aoSetRemovedLayerNames.insert( poLayer->GetName() );
                 delete poLayer;
             }
         }

@@ -761,7 +761,7 @@ try_again:
 
             apoGeomFieldProps.push_back(new OGRVRTGeomFieldProps());
             if( !ParseGeometryField(psChild, psLTree,
-                                    apoGeomFieldProps[apoGeomFieldProps.size()-1] ) )
+                                    apoGeomFieldProps.back() ) )
             {
                 goto error;
             }
@@ -781,7 +781,7 @@ try_again:
             goto error;
     }
 
-    if( apoGeomFieldProps.size() == 0 &&
+    if( apoGeomFieldProps.empty() &&
         CPLGetXMLValue( psLTree, "GeometryType", NULL ) == NULL )
     {
         /* If no GeometryField is found but source geometry fields */
@@ -1209,38 +1209,38 @@ bool OGRVRTLayer::ResetSourceReading()
 
                 if( !CPLIsInf(sEnvelope.MaxX) )
                 {
-                    if( osFilter.size() ) osFilter += " AND ";
+                    if( !osFilter.empty() ) osFilter += " AND ";
                     osFilter += CPLSPrintf("%s < %.15g", pszXField, sEnvelope.MaxX);
                 }
                 else if( sEnvelope.MaxX < 0 )
                 {
-                    if( osFilter.size() ) osFilter += " AND ";
+                    if( !osFilter.empty() ) osFilter += " AND ";
                     osFilter += "0 = 1";
                 }
 
                 if( !CPLIsInf(sEnvelope.MinY) )
                 {
-                    if( osFilter.size() ) osFilter += " AND ";
+                    if( !osFilter.empty() ) osFilter += " AND ";
                     osFilter += CPLSPrintf("%s > %.15g", pszYField, sEnvelope.MinY);
                 }
                 else if( sEnvelope.MinY > 0 )
                 {
-                    if( osFilter.size() ) osFilter += " AND ";
+                    if( !osFilter.empty() ) osFilter += " AND ";
                     osFilter += "0 = 1";
                 }
 
                 if( !CPLIsInf(sEnvelope.MaxY) )
                 {
-                    if( osFilter.size() ) osFilter += " AND ";
+                    if( !osFilter.empty() ) osFilter += " AND ";
                     osFilter += CPLSPrintf("%s < %.15g", pszYField, sEnvelope.MaxY);
                 }
                 else if( sEnvelope.MaxY < 0 )
                 {
-                    if( osFilter.size() ) osFilter += " AND ";
+                    if( !osFilter.empty() ) osFilter += " AND ";
                     osFilter += "0 = 1";
                 }
 
-                if( osFilter.size() != 0 )
+                if( !osFilter.empty() )
                 {
                     pszFilter = CPLStrdup(osFilter);
                 }
@@ -1310,7 +1310,7 @@ bool OGRVRTLayer::ResetSourceReading()
                     if( CPLIsInf(sEnvelope.MinX) && CPLIsInf(sEnvelope.MinY) &&
                         CPLIsInf(sEnvelope.MaxX) && CPLIsInf(sEnvelope.MaxY) &&
                         sEnvelope.MinX < 0 && sEnvelope.MinY < 0 &&
-                        sEnvelope.MaxY > 0 && sEnvelope.MaxY > 0 )
+                        sEnvelope.MaxX > 0 && sEnvelope.MaxY > 0 )
                     {
                         poSpatialGeom = poSrcRegion;
                         bDoIntersection = false;
@@ -1443,7 +1443,7 @@ retry:
 /* -------------------------------------------------------------------- */
     if( iStyleField != -1 )
     {
-        if( poSrcFeat->IsFieldSet(iStyleField) )
+        if( poSrcFeat->IsFieldSetAndNotNull(iStyleField) )
             poDstFeat->SetStyleString(
                 poSrcFeat->GetFieldAsString(iStyleField) );
     }
@@ -1606,7 +1606,7 @@ retry:
         OGRFieldDefn *poDstDefn = poFeatureDefn->GetFieldDefn( iVRTField );
         OGRFieldDefn *poSrcDefn = poSrcLayer->GetLayerDefn()->GetFieldDefn( anSrcField[iVRTField] );
 
-        if( !poSrcFeat->IsFieldSet( anSrcField[iVRTField] ) || poDstDefn->IsIgnored() )
+        if( !poSrcFeat->IsFieldSetAndNotNull( anSrcField[iVRTField] ) || poDstDefn->IsIgnored() )
             continue;
 
         if( abDirectCopy[iVRTField]
@@ -2257,7 +2257,7 @@ const char * OGRVRTLayer::GetFIDColumn()
     if( !bHasFullInitialized ) FullInitialize();
     if (!poSrcLayer || poDS->GetRecursionDetected()) return "";
 
-    if( osFIDFieldName.size() )
+    if( !osFIDFieldName.empty() )
         return osFIDFieldName;
 
     const char* pszFIDColumn = NULL;

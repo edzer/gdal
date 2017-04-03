@@ -28,17 +28,32 @@
  * DEALINGS IN THE SOFTWARE.
  ****************************************************************************/
 
-#include "ogr_spatialref.h"
+#include "cpl_port.h"
+#include "ogr_srs_api.h"
+
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
 #include "cpl_conv.h"
 #include "cpl_csv.h"
+#include "cpl_error.h"
+#include "cpl_string.h"
+#include "cpl_vsi.h"
+#include "ogr_core.h"
 #include "ogr_p.h"
+#include "ogr_spatialref.h"
 
 CPL_CVSID("$Id$");
 
+// PCI uses a 16-character string for coordinate system and datum/ellipsoid.
+static const int knProjSize = 16;
+
 typedef struct
 {
-    const char  *pszPCIDatum;
-    int         nEPSGCode;
+    const char *pszPCIDatum;
+    int        nEPSGCode;
 } PCIDatums;
 
 static const PCIDatums asDatums[] =
@@ -194,8 +209,11 @@ OGRErr OGRSpatialReference::importFromPCI( const char *pszProj,
 {
     Clear();
 
-    if( pszProj == NULL || CPLStrnlen(pszProj, 16) < 16 )
+    if( pszProj == NULL ||
+        CPLStrnlen(pszProj, knProjSize) < static_cast<size_t>(knProjSize) )
+    {
         return OGRERR_CORRUPT_DATA;
+    }
 
     CPLDebug( "OSR_PCI", "Trying to import projection \"%s\"", pszProj );
 
@@ -524,10 +542,12 @@ OGRErr OGRSpatialReference::importFromPCI( const char *pszProj,
                 while( (papszLineItems = CSVReadParseLineL( fp )) != NULL )
                 {
                     if( CSLCount(papszLineItems) > 3
-                        && EQUALN(papszLineItems[0], szEarthModel, 4) )
+                        && EQUALN(papszLineItems[0], szEarthModel,
+                                  sizeof(szEarthModel)-1) )
                     {
                         papszDatumDefn = papszLineItems;
-                        strncpy( szEarthModel, papszLineItems[2], 4 );
+                        strncpy( szEarthModel, papszLineItems[2],
+                                 sizeof(szEarthModel)-1 );
                         break;
                     }
                     CSLDestroy( papszLineItems );
@@ -783,22 +803,22 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
 /* ==================================================================== */
 /*      Handle the projection definition.                               */
 /* ==================================================================== */
-    char szProj[17] = {};
+    char szProj[knProjSize + 1] = {};
 
     if( IsLocal() )
     {
         if( GetLinearUnits() > 0.30479999 && GetLinearUnits() < 0.3048010 )
-            CPLPrintStringFill( szProj, "FEET", 17 );
+            CPLPrintStringFill( szProj, "FEET", knProjSize );
         else
-            CPLPrintStringFill( szProj, "METER", 17 );
+            CPLPrintStringFill( szProj, "METER", knProjSize );
     }
     else if( pszProjection == NULL )
     {
-        CPLPrintStringFill( szProj, "LONG/LAT", 16 );
+        CPLPrintStringFill( szProj, "LONG/LAT", knProjSize );
     }
     else if( EQUAL(pszProjection, SRS_PT_ALBERS_CONIC_EQUAL_AREA) )
     {
-        CPLPrintStringFill( szProj, "ACEA", 16 );
+        CPLPrintStringFill( szProj, "ACEA", knProjSize );
         (*ppadfPrjParams)[2] = GetNormProjParm( SRS_PP_CENTRAL_MERIDIAN, 0.0 );
         (*ppadfPrjParams)[3] =
             GetNormProjParm( SRS_PP_LATITUDE_OF_ORIGIN, 0.0 );
@@ -811,7 +831,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
     }
     else if( EQUAL(pszProjection, SRS_PT_AZIMUTHAL_EQUIDISTANT) )
     {
-        CPLPrintStringFill( szProj, "AE", 16 );
+        CPLPrintStringFill( szProj, "AE", knProjSize );
         (*ppadfPrjParams)[2] = GetNormProjParm( SRS_PP_CENTRAL_MERIDIAN, 0.0 );
         (*ppadfPrjParams)[3] =
             GetNormProjParm( SRS_PP_LATITUDE_OF_ORIGIN, 0.0 );
@@ -820,7 +840,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
     }
     else if( EQUAL(pszProjection, SRS_PT_CASSINI_SOLDNER) )
     {
-        CPLPrintStringFill( szProj, "CASS", 16 );
+        CPLPrintStringFill( szProj, "CASS", knProjSize );
         (*ppadfPrjParams)[2] = GetNormProjParm( SRS_PP_CENTRAL_MERIDIAN, 0.0 );
         (*ppadfPrjParams)[3] =
             GetNormProjParm( SRS_PP_LATITUDE_OF_ORIGIN, 0.0 );
@@ -829,7 +849,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
     }
     else if( EQUAL(pszProjection, SRS_PT_EQUIDISTANT_CONIC) )
     {
-        CPLPrintStringFill( szProj, "EC", 16 );
+        CPLPrintStringFill( szProj, "EC", knProjSize );
         (*ppadfPrjParams)[2] =
             GetNormProjParm( SRS_PP_LONGITUDE_OF_CENTER, 0.0 );
         (*ppadfPrjParams)[3] =
@@ -843,7 +863,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
     }
     else if( EQUAL(pszProjection, SRS_PT_EQUIRECTANGULAR) )
     {
-        CPLPrintStringFill( szProj, "ER", 16 );
+        CPLPrintStringFill( szProj, "ER", knProjSize );
         (*ppadfPrjParams)[2] = GetNormProjParm( SRS_PP_CENTRAL_MERIDIAN, 0.0 );
         (*ppadfPrjParams)[3] =
             GetNormProjParm( SRS_PP_STANDARD_PARALLEL_1, 0.0 );
@@ -852,7 +872,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
     }
     else if( EQUAL(pszProjection, SRS_PT_GNOMONIC) )
     {
-        CPLPrintStringFill( szProj, "GNO", 16 );
+        CPLPrintStringFill( szProj, "GNO", knProjSize );
         (*ppadfPrjParams)[2] = GetNormProjParm( SRS_PP_CENTRAL_MERIDIAN, 0.0 );
         (*ppadfPrjParams)[3] =
             GetNormProjParm( SRS_PP_LATITUDE_OF_ORIGIN, 0.0 );
@@ -861,7 +881,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
     }
     else if( EQUAL(pszProjection, SRS_PT_LAMBERT_AZIMUTHAL_EQUAL_AREA) )
     {
-        CPLPrintStringFill( szProj, "LAEA", 16 );
+        CPLPrintStringFill( szProj, "LAEA", knProjSize );
         (*ppadfPrjParams)[2] = GetNormProjParm( SRS_PP_CENTRAL_MERIDIAN, 0.0 );
         (*ppadfPrjParams)[3] =
             GetNormProjParm( SRS_PP_LATITUDE_OF_ORIGIN, 0.0 );
@@ -870,7 +890,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
     }
     else if( EQUAL(pszProjection, SRS_PT_LAMBERT_CONFORMAL_CONIC_2SP) )
     {
-        CPLPrintStringFill( szProj, "LCC", 16 );
+        CPLPrintStringFill( szProj, "LCC", knProjSize );
         (*ppadfPrjParams)[2] = GetNormProjParm( SRS_PP_CENTRAL_MERIDIAN, 0.0 );
         (*ppadfPrjParams)[3] =
             GetNormProjParm( SRS_PP_LATITUDE_OF_ORIGIN, 0.0 );
@@ -883,7 +903,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
     }
     else if( EQUAL(pszProjection, SRS_PT_LAMBERT_CONFORMAL_CONIC_1SP) )
     {
-        CPLPrintStringFill( szProj, "LCC_1SP", 16 );
+        CPLPrintStringFill( szProj, "LCC_1SP", knProjSize );
         (*ppadfPrjParams)[2] = GetNormProjParm( SRS_PP_CENTRAL_MERIDIAN, 0.0 );
         (*ppadfPrjParams)[3] =
             GetNormProjParm( SRS_PP_LATITUDE_OF_ORIGIN, 0.0 );
@@ -893,7 +913,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
     }
     else if( EQUAL(pszProjection, SRS_PT_MILLER_CYLINDRICAL) )
     {
-        CPLPrintStringFill( szProj, "MC", 16 );
+        CPLPrintStringFill( szProj, "MC", knProjSize );
         (*ppadfPrjParams)[2] = GetNormProjParm( SRS_PP_CENTRAL_MERIDIAN, 0.0 );
         (*ppadfPrjParams)[3] =
             GetNormProjParm( SRS_PP_LATITUDE_OF_ORIGIN, 0.0 );
@@ -902,7 +922,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
     }
     else if( EQUAL(pszProjection, SRS_PT_MERCATOR_1SP) )
     {
-        CPLPrintStringFill( szProj, "MER", 16 );
+        CPLPrintStringFill( szProj, "MER", knProjSize );
         (*ppadfPrjParams)[2] = GetNormProjParm( SRS_PP_CENTRAL_MERIDIAN, 0.0 );
         (*ppadfPrjParams)[3] =
             GetNormProjParm( SRS_PP_LATITUDE_OF_ORIGIN, 0.0 );
@@ -912,7 +932,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
     }
     else if( EQUAL(pszProjection, SRS_PT_ORTHOGRAPHIC) )
     {
-        CPLPrintStringFill( szProj, "OG", 16 );
+        CPLPrintStringFill( szProj, "OG", knProjSize );
         (*ppadfPrjParams)[2] = GetNormProjParm( SRS_PP_CENTRAL_MERIDIAN, 0.0 );
         (*ppadfPrjParams)[3] =
             GetNormProjParm( SRS_PP_LATITUDE_OF_ORIGIN, 0.0 );
@@ -921,7 +941,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
     }
     else if( EQUAL(pszProjection, SRS_PT_HOTINE_OBLIQUE_MERCATOR) )
     {
-        CPLPrintStringFill( szProj, "OM", 16 );
+        CPLPrintStringFill( szProj, "OM", knProjSize );
         (*ppadfPrjParams)[2] =
             GetNormProjParm( SRS_PP_LONGITUDE_OF_CENTER, 0.0);
         (*ppadfPrjParams)[3] = GetNormProjParm( SRS_PP_LATITUDE_OF_CENTER, 0.0);
@@ -934,7 +954,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
     else if( EQUAL(pszProjection,
                    SRS_PT_HOTINE_OBLIQUE_MERCATOR_TWO_POINT_NATURAL_ORIGIN) )
     {
-        CPLPrintStringFill( szProj, "OM", 16 );
+        CPLPrintStringFill( szProj, "OM", knProjSize );
         (*ppadfPrjParams)[3] = GetNormProjParm( SRS_PP_LATITUDE_OF_CENTER, 0.0);
         (*ppadfPrjParams)[11] =
             GetNormProjParm(SRS_PP_LATITUDE_OF_POINT_1, 0.0);
@@ -950,7 +970,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
     }
     else if( EQUAL(pszProjection, SRS_PT_POLYCONIC) )
     {
-        CPLPrintStringFill( szProj, "PC", 16 );
+        CPLPrintStringFill( szProj, "PC", knProjSize );
         (*ppadfPrjParams)[2] = GetNormProjParm( SRS_PP_CENTRAL_MERIDIAN, 0.0 );
         (*ppadfPrjParams)[3] =
             GetNormProjParm( SRS_PP_LATITUDE_OF_ORIGIN, 0.0 );
@@ -959,7 +979,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
     }
     else if( EQUAL(pszProjection, SRS_PT_POLAR_STEREOGRAPHIC) )
     {
-        CPLPrintStringFill( szProj, "PS", 16 );
+        CPLPrintStringFill( szProj, "PS", knProjSize );
         (*ppadfPrjParams)[2] = GetNormProjParm( SRS_PP_CENTRAL_MERIDIAN, 0.0 );
         (*ppadfPrjParams)[3] =
             GetNormProjParm( SRS_PP_LATITUDE_OF_ORIGIN, 0.0 );
@@ -969,14 +989,14 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
     }
     else if( EQUAL(pszProjection, SRS_PT_ROBINSON) )
     {
-        CPLPrintStringFill( szProj, "ROB", 16 );
+        CPLPrintStringFill( szProj, "ROB", knProjSize );
         (*ppadfPrjParams)[2] = GetNormProjParm( SRS_PP_CENTRAL_MERIDIAN, 0.0 );
         (*ppadfPrjParams)[6] = GetNormProjParm( SRS_PP_FALSE_EASTING, 0.0 );
         (*ppadfPrjParams)[7] = GetNormProjParm( SRS_PP_FALSE_NORTHING, 0.0 );
     }
     else if( EQUAL(pszProjection, SRS_PT_OBLIQUE_STEREOGRAPHIC) )
     {
-        CPLPrintStringFill( szProj, "SGDO", 16 );
+        CPLPrintStringFill( szProj, "SGDO", knProjSize );
         (*ppadfPrjParams)[2] = GetNormProjParm( SRS_PP_CENTRAL_MERIDIAN, 0.0 );
         (*ppadfPrjParams)[3] =
             GetNormProjParm( SRS_PP_LATITUDE_OF_ORIGIN, 0.0 );
@@ -986,7 +1006,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
     }
     else if( EQUAL(pszProjection, SRS_PT_STEREOGRAPHIC) )
     {
-        CPLPrintStringFill( szProj, "SG", 16 );
+        CPLPrintStringFill( szProj, "SG", knProjSize );
         (*ppadfPrjParams)[2] = GetNormProjParm( SRS_PP_CENTRAL_MERIDIAN, 0.0 );
         (*ppadfPrjParams)[3] =
             GetNormProjParm( SRS_PP_LATITUDE_OF_ORIGIN, 0.0 );
@@ -996,7 +1016,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
     }
     else if( EQUAL(pszProjection, SRS_PT_SINUSOIDAL) )
     {
-        CPLPrintStringFill( szProj, "SIN", 16 );
+        CPLPrintStringFill( szProj, "SIN", knProjSize );
         (*ppadfPrjParams)[2] =
             GetNormProjParm( SRS_PP_LONGITUDE_OF_CENTER, 0.0 );
         (*ppadfPrjParams)[6] = GetNormProjParm( SRS_PP_FALSE_EASTING, 0.0 );
@@ -1009,7 +1029,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
 
         if( nZone != 0 )
         {
-            CPLPrintStringFill( szProj, "UTM", 16 );
+            CPLPrintStringFill( szProj, "UTM", knProjSize );
             if( bNorth )
                 CPLPrintInt32( szProj + 5, nZone, 4 );
             else
@@ -1017,7 +1037,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
         }
         else
         {
-            CPLPrintStringFill( szProj, "TM", 16 );
+            CPLPrintStringFill( szProj, "TM", knProjSize );
             (*ppadfPrjParams)[2] =
                 GetNormProjParm( SRS_PP_CENTRAL_MERIDIAN, 0.0 );
             (*ppadfPrjParams)[3] =
@@ -1029,7 +1049,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
     }
     else if( EQUAL(pszProjection, SRS_PT_VANDERGRINTEN) )
     {
-        CPLPrintStringFill( szProj, "VDG", 16 );
+        CPLPrintStringFill( szProj, "VDG", knProjSize );
         (*ppadfPrjParams)[2] = GetNormProjParm( SRS_PP_CENTRAL_MERIDIAN, 0.0 );
         (*ppadfPrjParams)[6] = GetNormProjParm( SRS_PP_FALSE_EASTING, 0.0 );
         (*ppadfPrjParams)[7] = GetNormProjParm( SRS_PP_FALSE_NORTHING, 0.0 );
@@ -1040,7 +1060,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
         CPLDebug( "OSR_PCI",
                   "Projection \"%s\" unsupported by PCI. "
                   "PIXEL value will be used.", pszProjection );
-        CPLPrintStringFill( szProj, "PIXEL", 16 );
+        CPLPrintStringFill( szProj, "PIXEL", knProjSize );
     }
 
 /* ==================================================================== */
@@ -1050,17 +1070,25 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
 /* -------------------------------------------------------------------- */
 /*      Is this a well known datum?                                     */
 /* -------------------------------------------------------------------- */
-    const char  *pszDatum = GetAttrValue( "DATUM" );
+    const char *pszDatum = GetAttrValue( "DATUM" );
     char szEarthModel[5] = {};
 
     if( pszDatum == NULL || strlen(pszDatum) == 0 )
-        /* do nothing */;
+    {
+        // Do nothing.
+    }
     else if( EQUAL( pszDatum, SRS_DN_NAD27 ) )
+    {
         CPLPrintStringFill( szEarthModel, "D-01", 4 );
+    }
     else if( EQUAL( pszDatum, SRS_DN_NAD83 ) )
+    {
         CPLPrintStringFill( szEarthModel, "D-02", 4 );
+    }
     else if( EQUAL( pszDatum, SRS_DN_WGS84 ) )
+    {
         CPLPrintStringFill( szEarthModel, "D000", 4 );
+    }
 
 /* -------------------------------------------------------------------- */
 /*      If not a very well known datum, try for an EPSG based           */
@@ -1078,7 +1106,8 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
             {
                 if( asDatums[i].nEPSGCode == nGCS_EPSG )
                 {
-                    strncpy( szEarthModel, asDatums[i].pszPCIDatum, 5 );
+                    snprintf( szEarthModel, sizeof(szEarthModel), "%s",
+                              asDatums[i].pszPCIDatum );
                     break;
                 }
             }
@@ -1132,8 +1161,8 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
                         && CPLIsEqual(dfSemiMajor, CPLAtof(papszLineItems[2]))
                         && CPLIsEqual(dfSemiMinor, CPLAtof(papszLineItems[3])) )
                     {
-                        strncpy( szEarthModel, papszLineItems[0], 5 );
-                        szEarthModel[4] = '\0';
+                        snprintf( szEarthModel, sizeof(szEarthModel), "%s",
+                                  papszLineItems[0] );
                         break;
                     }
 
@@ -1164,12 +1193,10 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
         && pszDatum != NULL )
     {
         const char *pszDatumCSV = CSVFilename( "pci_datum.txt" );
-        VSILFILE *fp = NULL;
-        double adfTOWGS84[7];
+        double adfTOWGS84[7] = {};
         const bool bHaveTOWGS84 = GetTOWGS84(adfTOWGS84, 7) == OGRERR_NONE;
 
-        if( pszDatumCSV )
-            fp = VSIFOpenL( pszDatumCSV, "r" );
+        VSILFILE *fp = pszDatumCSV ? VSIFOpenL( pszDatumCSV, "r" ) : NULL;
 
         if( fp != NULL )
         {
@@ -1184,8 +1211,8 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
                     && EQUAL(papszLineItems[1], pszDatum)
                     && EQUAL(papszLineItems[2], szEarthModel) )
                 {
-                    strncpy( szEarthModel, papszLineItems[0], 5 );
-                    szEarthModel[4] = '\0';
+                    snprintf( szEarthModel, sizeof(szEarthModel), "%s",
+                              papszLineItems[0] );
                     break;
                 }
 
@@ -1231,8 +1258,8 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
 
                 if( bTOWGS84Match )
                 {
-                    strncpy( szEarthModel, papszLineItems[0], 5 );
-                    szEarthModel[4] = '\0';
+                    snprintf( szEarthModel, sizeof(szEarthModel), "%s",
+                              papszLineItems[0] );
                     break;
                 }
 
@@ -1246,7 +1273,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
 
     CPLPrintStringFill( szProj + 12, szEarthModel, 4 );
 
-    CPLDebug( "OSR_PCI", "Translated as '%s'", szProj  );
+    CPLDebug( "OSR_PCI", "Translated as '%s'", szProj );
 
 /* -------------------------------------------------------------------- */
 /*      Translate the linear units.                                     */
@@ -1257,7 +1284,7 @@ OGRErr OGRSpatialReference::exportToPCI( char **ppszProj, char **ppszUnits,
 /* -------------------------------------------------------------------- */
 /*      Report results.                                                 */
 /* -------------------------------------------------------------------- */
-    szProj[16] = '\0';
+    szProj[knProjSize] = '\0';
     *ppszProj = CPLStrdup( szProj );
 
     *ppszUnits = CPLStrdup( pszUnits );

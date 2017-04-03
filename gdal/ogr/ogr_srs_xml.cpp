@@ -27,8 +27,19 @@
  * DEALINGS IN THE SOFTWARE.
  ****************************************************************************/
 
+#include "cpl_port.h"
+#include "ogr_srs_api.h"
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
+#include "cpl_conv.h"
+#include "cpl_error.h"
 #include "cpl_minixml.h"
 #include "cpl_multiproc.h"
+#include "cpl_string.h"
+#include "ogr_core.h"
 #include "ogr_p.h"
 #include "ogr_spatialref.h"
 
@@ -415,7 +426,7 @@ static CPLXMLNode *exportGeogCSToXML( const OGRSpatialReference *poSRS )
 /* -------------------------------------------------------------------- */
 /*      Establish initial infrastructure.                               */
 /* -------------------------------------------------------------------- */
-    CPLXMLNode  *psGCS_XML =
+    CPLXMLNode *psGCS_XML =
         CPLCreateXMLNode( NULL, CXT_Element, "gml:GeographicCRS" );
     addGMLId( psGCS_XML );
 
@@ -441,7 +452,7 @@ static CPLXMLNode *exportGeogCSToXML( const OGRSpatialReference *poSRS )
             CPLCreateXMLNode( psGCS_XML, CXT_Element, "gml:usesEllipsoidalCS" ),
             CXT_Element, "gml:EllipsoidalCS" );
 
-    addGMLId( psECS  );
+    addGMLId( psECS );
 
     CPLCreateXMLElementAndValue( psECS, "gml:csName", "ellipsoidal" );
 
@@ -934,7 +945,7 @@ static int getEPSGObjectCodeValue( CPLXMLNode *psNode,
         || !EQUAL(osObjectType, pszEPSGObjectType) )
         return nDefault;
 
-    if( strlen(osValue) > 0 )
+    if( !osValue.empty() )
         return atoi(osValue);
 
     const char *pszValue = CPLGetXMLValue( psNode, "", NULL);
@@ -1168,11 +1179,10 @@ static OGRErr importProjCSFromXML( OGRSpatialReference *poSRS,
 /*      Try to set the GEOGCS info.                                     */
 /* -------------------------------------------------------------------- */
 
-    OGRErr eErr = OGRERR_NONE;
     CPLXMLNode *psSubXML = CPLGetXMLNode( psCRS, "baseCRS.GeographicCRS" );
     if( psSubXML != NULL )
     {
-        eErr = importGeogCSFromXML( poSRS, psSubXML );
+        const OGRErr eErr = importGeogCSFromXML( poSRS, psSubXML );
         if( eErr != OGRERR_NONE )
             return eErr;
     }

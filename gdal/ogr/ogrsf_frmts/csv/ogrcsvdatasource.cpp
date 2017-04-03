@@ -27,14 +27,25 @@
  * DEALINGS IN THE SOFTWARE.
  ****************************************************************************/
 
-#include "cpl_conv.h"
-#include "cpl_string.h"
-#include "cpl_csv.h"
-#include "cpl_vsi_virtual.h"
-
+#include "cpl_port.h"
 #include "ogr_csv.h"
 
+#include <cerrno>
+#include <cstring>
+#include <string>
+
+#include "cpl_csv.h"
+#include "cpl_conv.h"
+#include "cpl_error.h"
+#include "cpl_string.h"
+#include "cpl_vsi.h"
+#include "cpl_vsi_virtual.h"
+#include "ogr_core.h"
+#include "ogr_feature.h"
+#include "ogr_geometry.h"
+#include "ogr_spatialref.h"
 #include "ogreditablelayer.h"
+#include "ogrsf_frmts.h"
 
 CPL_CVSID("$Id$");
 
@@ -55,7 +66,7 @@ class OGRCSVEditableLayerSynchronizer: public IOGREditableLayerSynchronizer
                    virtual ~OGRCSVEditableLayerSynchronizer();
 
             virtual OGRErr EditableSyncToDisk(OGRLayer* poEditableLayer,
-                                              OGRLayer** ppoDecoratedLayer);
+                                              OGRLayer** ppoDecoratedLayer) override;
 };
 
 /************************************************************************/
@@ -122,9 +133,9 @@ OGRErr OGRCSVEditableLayerSynchronizer::EditableSyncToDisk(OGRLayer* poEditableL
         }
     }
 
-    const bool bHasXY = ( m_poCSVLayer->GetXField().size() != 0 &&
-                          m_poCSVLayer->GetYField().size() != 0 );
-    const bool bHasZ = ( m_poCSVLayer->GetZField().size() != 0 );
+    const bool bHasXY = ( !m_poCSVLayer->GetXField().empty() &&
+                          !m_poCSVLayer->GetYField().empty() );
+    const bool bHasZ = ( !m_poCSVLayer->GetZField().empty() );
     if( bHasXY && !CPLFetchBool(m_papszOpenOptions, "KEEP_GEOM_COLUMNS", true) )
     {
         if( poCSVTmpLayer->GetLayerDefn()->GetFieldIndex(m_poCSVLayer->GetXField()) < 0 )
@@ -260,8 +271,8 @@ class OGRCSVEditableLayer: public OGREditableLayer
                             char** papszOpenOptions);
 
     virtual OGRErr      CreateField( OGRFieldDefn *poField,
-                                     int bApproxOK = TRUE );
-    virtual GIntBig     GetFeatureCount( int bForce = TRUE );
+                                     int bApproxOK = TRUE ) override;
+    virtual GIntBig     GetFeatureCount( int bForce = TRUE ) override;
 };
 
 /************************************************************************/
@@ -387,11 +398,11 @@ CPLString OGRCSVDataSource::GetRealExtension(CPLString osFilename)
     CPLString osExt = CPLGetExtension(osFilename);
     if( STARTS_WITH(osFilename, "/vsigzip/") && EQUAL(osExt, "gz") )
     {
-        if( strlen(osFilename) > 7
-            && EQUAL(osFilename + strlen(osFilename) - 7, ".csv.gz") )
+        if( osFilename.size() > 7
+            && EQUAL(osFilename + osFilename.size() - 7, ".csv.gz") )
             osExt = "csv";
-        else if( strlen(osFilename) > 7
-                 && EQUAL(osFilename + strlen(osFilename) - 7, ".tsv.gz") )
+        else if( osFilename.size() > 7
+                 && EQUAL(osFilename + osFilename.size() - 7, ".tsv.gz") )
             osExt = "tsv";
     }
     return osExt;
@@ -450,9 +461,9 @@ int OGRCSVDataSource::Open( const char * pszFilename, int bUpdateIn,
               STARTS_WITH_CI(osBaseFilename, "NationalFedCodes_") ||
               STARTS_WITH_CI(osBaseFilename, "AllStates_") ||
               STARTS_WITH_CI(osBaseFilename, "AllStatesFedCodes_") ||
-              ( strlen(osBaseFilename) > 2 &&
+              ( osBaseFilename.size() > 2 &&
                 STARTS_WITH_CI(osBaseFilename+2, "_Features_")) ||
-              ( strlen(osBaseFilename) > 2 &&
+              ( osBaseFilename.size() > 2 &&
                 STARTS_WITH_CI(osBaseFilename+2, "_FedCodes_"))) &&
              (EQUAL(osExt, "txt") || EQUAL(osExt, "zip")) )
     {
@@ -515,7 +526,7 @@ int OGRCSVDataSource::Open( const char * pszFilename, int bUpdateIn,
             if (STARTS_WITH_CI(osBaseFilename, "NationalFedCodes_") ||
                 STARTS_WITH_CI(osBaseFilename, "AllStatesFedCodes_") ||
                 STARTS_WITH_CI(osBaseFilename, "ANTARCTICA_") ||
-                ( strlen(osBaseFilename) > 2 &&
+                ( osBaseFilename.size() > 2 &&
                   STARTS_WITH_CI(osBaseFilename+2, "_FedCodes_")))
             {
                 OpenTable( osFilename, papszOpenOptionsIn, NULL, "PRIMARY");
